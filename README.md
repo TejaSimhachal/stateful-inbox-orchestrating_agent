@@ -1,4 +1,3 @@
-# stateful-inbox-orchestrating_agent
 # Email Automation Agent with LangGraph and FastAPI
 
 This project implements an advanced, event-driven AI Agent pipeline designed for email automation, featuring robust state persistence, human-in-the-loop capabilities, and asynchronous operations.
