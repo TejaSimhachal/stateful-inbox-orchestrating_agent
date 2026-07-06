@@ -1,84 +1,172 @@
 # Email Automation Agent with LangGraph and FastAPI
 
-This project implements an advanced, event-driven AI Agent pipeline designed for email automation, featuring robust state persistence, human-in-the-loop capabilities, and asynchronous operations.
+This project implements an advanced, event-driven AI Agent pipeline designed for email automation. It combines a FastAPI HTTP control surface with a stateful LangGraph execution topology to support multi-turn workflows, human-in-the-loop review, and transactional state persistence so long-running asynchronous runs can pause and resume.
 
-## ⚙️ System Architecture & Data Flow
+## Quick summary
 
-The backend of this system is structured into two main components:
-1.  **FastAPI REST API**: A high-performance presentation layer responsible for handling client requests.
-2.  **LangGraph Framework**: A stateful execution orchestration framework that manages the AI agent's workflow.
+- Purpose: Automate email fetch, draft generation, human review, and SMTP transmission while preserving execution state between asynchronous turns.
+- Primary files:
+  - `main.py` — FastAPI controllers that start, resume, inspect, and mutate the agent execution state.
+  - `email_agent_graph.py` — LangGraph StateGraph definition: nodes, routers, checkpointer (MemorySaver), and `agent_app` compiled instance.
+  - `.env.example` — example environment variables used for model credentials and email access.
+  - `requirements.txt` — Python package dependencies.
 
-The system utilizes a transactional persistence layer (`MemorySaver`) to manage long-running, multi-turn asynchronous loops. This allows execution frames to freeze and resume cleanly via unique user session tokens (`thread_id`), ensuring continuity in complex interactions.
+## Architecture & data flow
 
-### 🔄 End-to-End Architectural Data Flow
+Two main components work together:
+1. FastAPI REST API (main.py) — presentation and control layer. It accepts client requests, inspects saved agent frames, injects commands, and resumes the LangGraph execution.
+2. LangGraph Stateful Execution (email_agent_graph.py) — the stateful workflow that runs nodes such as `fetch_emails`, `generate_draft`, `human_review`, and `transmit_smtp`.
 
-The following diagram illustrates the interaction boundaries between the REST API endpoints, the underlying LangGraph execution topology, and external mail protocols (IMAP/SMTP):
+The system uses a transactional persistence layer (`MemorySaver`) so execution frames can freeze and resume via `agent_app.astream()` and `Command(resume=...)`. Blocking IMAP/SMTP calls run on executor threads to avoid blocking the event loop.
 
 ```
 [ CLIENT HTTP REQ ]
      │
      ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ FastAPI API Gate Controllers (main.py)                                 │
-│                                                                        │
-│   POST /agent/start      ──► Initial State Ingestion                   │
-│   POST /agent/select     ──► Pointer Mutation via .aupdate_state()     │
-│   POST /agent/review     ──► Frame Resumption via Command(resume=...)  │
-└──────────────────────────────────┬─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ FastAPI API Gate Controllers (main.py)                               │
+│                                                                       │
+│   POST /agent/start      ──► Initial State Ingestion                  │
+│   POST /agent/select     ──► Pointer Mutation via .aupdate_state()    │
+│   POST /agent/review     ──► Frame Resumption via Command(resume=...) │
+└──────────────────────────────────┬──────────────────────────────────┘
      │Streams State via .astream()│
      ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ LangGraph Stateful Agent Execution Engine (imap_fastapi.py)            │
-│                                                                        │
-│           ┌─────────────── entrypoint_router ──────────────┐           │
-│           │ (If state["draft_reply"] exists, auto-bypass)  │           │
-│           ▼                                                ▼           │
-│   [ fetch_emails_node ]                             [ generate_draft ] ◄──┐
-│           │                                                │              │
-│  Executes Task Isolation                                   ▼              │
-│  via asyncio.to_thread                               [ human_review ]     │
-│           │                                                │              │
-│    (Connects to IMAP)                                      ▼              │
-│           │                                         Is state approved?    │
-│           ▼                                         ├── NO ───────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ LangGraph Stateful Agent Execution Engine (email_agent_graph.py)     │
+│                                                                       │
+│           ┌─────────────── entrypoint_router ──────────────┐          │
+│           │ (If state["draft_reply"] exists, auto-bypass)  │          │
+│           ▼                                                ▼          │
+│   [ fetch_emails_node ]                             [ generate_draft ]◄─┐
+│           │                                                │            │
+│  Executes Task Isolation                                   ▼            │
+│  via asyncio.to_thread                               [ human_review ]    │
+│           │                                                │            │
+│    (Connects to IMAP)                                      ▼            │
+│           │                                         Is state approved?   │
+│           ▼                                         ├── NO ──────────────┘
 │         [ END ] (State Yielded to UI)               └── YES ──────┐
-│                                                                   ▼
-│                                                           [ transmit_smtp ]
-│                                                                   │
-│                                                                   ▼
-│                                                                 [ END ]
-└────────────────────────────────────────────────────────────────────────┘
+│                                                                  ▼
+│                                                          [ transmit_smtp ]
+│                                                                  │
+│                                                                  ▼
+│                                                                [ END ]
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🧠 Core Engineering Highlight Columns
+## Core engineering highlights
 
-#### 1. Transactional State Persistence Contract (`AgentState`)
-All communication, context retention, and history are governed by an atomic data contract schema. Every node operation executes mutations cleanly against this thread-locked schema structure:
+- Transactional state contract (AgentState): the workflow uses a typed state dict containing `user_query`, `search_results`, `current_idx`, `current_email`, `draft_reply`, `approved`, and `email_filters` so nodes can read and mutate the shared execution frame atomically.
 
-| Key State Field    | Data Type            | System Governance                                                               |
-| :----------------- | :------------------- | :------------------------------------------------------------------------------ |
-| `user_query`       | `str`                | Holds primary search constraints or volatile human critique feedback loops.     |
-| `search_results`   | `List[Dict[str, Any]]` | Structured storage for email headers, metadata, and body packets pulled from IMAP. |
-| `current_idx`      | `Optional[int]`      | Explicit index tracking boundary to isolate the specific selected conversation loop. |
-| `current_email`    | `Dict[str, Any]`     | The locked, schema-validated target context block containing clean parsed addresses. |
-| `draft_reply`      | `str`                | Volatile text scratchpad storing the active response iteration draft.           |
-| `approved`         | `bool`               | Evaluation gate boolean controlling final downstream email delivery.            |
+- Non-blocking IO isolation: legacy IMAP/SMTP (imaplib / smtplib) are synchronous; the code runs these calls via `asyncio.to_thread()` to avoid event-loop starvation.
 
-#### 2. Non-Blocking IO Isolation Strategy
-Network handshakes via legacy mail protocols (`imaplib` / `smtplib`) are natively synchronous and blocking. To prevent event-loop starvation and ensure the FastAPI server never slows down, these transactions are isolated on a specialized thread pool:
+- State-aware routing: `entrypoint_router` inspects the active frame — if `draft_reply` exists it's a revision pass and routes directly to `generate_draft` to avoid unnecessary reclassification.
 
-```python
-# Thread isolation pattern deployed across data nodes
-fetched_results = await asyncio.to_thread(blocking_imap_call)
+- Human-in-the-loop gate: `human_review_node` uses `interrupt()` to freeze execution and waits for a `Command(resume=...)` from the API, enabling safe human review and revisions.
+
+## Files and responsibilities
+
+- `main.py` — exposes these endpoints:
+  - POST /agent/start
+  - POST /agent/select/{thread_id}/{index_number}
+  - POST /agent/review
+  - GET /agent/state/{thread_id}
+
+  It uses `agent_app.astream()`, `agent_app.aget_state()`, and `agent_app.aupdate_state()` to run and manipulate the LangGraph execution.
+
+- `email_agent_graph.py` — defines:
+  - AgentState TypedDict and `EmailFilter` Pydantic model (with date validation for IMAP criteria).
+  - Nodes: `fetch_emails_node`, `generate_draft_node`, `human_review_node`, `transmit_smtp_node`.
+  - Routers: `entrypoint_router` (entrypoint selection) and `review_edge_router` (decide between continue drafting and SMTP transmit).
+  - Workflow composition: nodes, edges, conditional routers, and `MemorySaver` checkpointer.
+
+- `.env.example` — variables you must set to run the app. Copy to `.env` and populate real credentials.
+
+## Configuration / environment
+
+Copy the example and provide real credentials before running:
+
+```
+cp .env.example .env
+# then edit .env and fill in values
 ```
 
-#### 3. State-Aware Contextual Revision Routing
-To support iterative feedback, the `entrypoint_router` inspects the active thread checkpoint before querying the LLM. If `state["draft_reply"]` contains text data, the router identifies this run as an ongoing human critique iteration. It bypasses token classification entirely and routes directly to the drafting environment, ensuring previous context is never erased.
+Environment variables used by the code:
+- GITHUB_TOKEN — used as the API key for AsyncOpenAI in the code (the repo uses this env var name; update if you prefer a different name).
+- EMAIL_USER — Gmail account used for IMAP/SMTP.
+- EMAIL_PASS — Gmail app password (16-character app password expected for Gmail SMTP/IMAP use).
 
-#### 4. Asynchronous Human-in-the-Loop (HITL) Gateways
-The execution engine stops completely when human review is required. LangGraph saves the active frame to the database checkpointer using `interrupt()`, drops the execution token, and returns a `paused_for_review` code to the client. The graph can sleep in this state indefinitely. It only wakes up when the supervisor hits the `/agent/review` route, which uses the `Command` framework to inject the decision payload back into the code block:
+Security note: do not commit `.env` or credentials to the repository.
 
-```python
-# Atomic state injection to wake up the execution graph
-await agent_app.astream(Command(resume=review_payload), config)
+## Install and run
+
+Install dependencies and run the FastAPI server:
+
 ```
+python -m pip install -r requirements.txt
+# development with reload
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+# or run the module which calls uvicorn.run in main.py
+python main.py
+```
+
+## HTTP API examples
+
+Start a new agent run:
+
+```
+POST /agent/start
+Content-Type: application/json
+{
+  "thread_id": "thread-123",
+  "user_query": "Find unread invoices from Acme Corp"
+}
+```
+
+Select an email and request a reply draft:
+
+```
+POST /agent/select/thread-123/0
+Content-Type: application/json
+{
+  "reply_instruction": "Please write a polite request for invoice and due date information."
+}
+```
+
+Submit human review (approve or request revision):
+
+```
+POST /agent/review
+Content-Type: application/json
+{
+  "thread_id": "thread-123",
+  "decision": "revise",
+  "feedback": "Shorten the reply and add a sentence about preferred payment methods."
+}
+```
+
+Inspect current saved state:
+
+```
+GET /agent/state/thread-123
+```
+
+## Notes & recommended improvements
+
+- The code currently hardcodes the model name (`gpt-4o-mini`) and the AsyncOpenAI base_url to `https://models.inference.ai.azure.com`. Consider moving model name and base_url into environment variables for configuration flexibility.
+
+- The README previously referenced `imap_fastapi.py` in one spot; this repository uses `email_agent_graph.py`. Consider renaming or updating references for consistency.
+
+- For production use, prefer a persistent checkpointer (database-backed) instead of `MemorySaver` so agent frames survive process restarts.
+
+- Add tests for the API endpoints and small integration tests that mock IMAP/SMTP to validate the workflow logic.
+
+## License
+
+This repository does not currently include a LICENSE file — add one if you intend to publish the project under an open-source license.
+
+---
+
+Maintained explanation: the original README's architecture, state model, non-blocking IO strategy, and human-in-the-loop flow have been preserved and reorganized for clarity. If you'd like, I can now push additional changes such as renaming in-repo references, moving configuration into `.env`, or adding a Dockerfile and CI workflow.
