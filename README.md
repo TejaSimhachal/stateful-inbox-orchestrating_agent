@@ -95,7 +95,7 @@ cp .env.example .env
 Environment variables used by the code:
 - GITHUB_TOKEN — used as the API key for AsyncOpenAI in the code (the repo uses this env var name; update if you prefer a different name).
 - EMAIL_USER — Gmail account used for IMAP/SMTP.
-- EMAIL_PASS — Gmail app password (16-character app password expected for Gmail SMTP/IMAP use).
+- EMAIL_PASS — Gmail app password (16-character app password expected for Gmail SMTP/IMAP use). [Get one here](https://myaccount.google.com/apppasswords)
 
 Security note: do not commit `.env` or credentials to the repository.
 
