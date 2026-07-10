@@ -514,7 +514,7 @@ async def human_review_node(state: AgentState) -> Dict[str, Any]:
         }
 
 
-# --- EDGE ROUTER ---
+# -- EDGE ROUTER ---
 def review_edge_router(state: AgentState) -> Literal["generate_draft", "transmit_smtp"]:
     print(
         f"\n🔮 [EDGE ROUTER] Evaluating node transition criteria. Approved flag is: {state.get('approved')}"

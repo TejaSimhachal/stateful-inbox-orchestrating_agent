@@ -7,7 +7,6 @@ import uuid
 FASTAPI_BASE_URL = (
     "http://127.0.0.1:8000"  # Ensure this matches your FastAPI server's address
 )
-
 # --- Streamlit Session State Initialization ---
 # Initialize session state variables if they don't exist
 if "thread_id" not in st.session_state:
