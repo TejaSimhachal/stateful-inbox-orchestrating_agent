@@ -108,7 +108,7 @@ Security note: do not commit `.env` or credentials to the repository.
 
 2.  **Run the Streamlit application**: In a *separate* terminal, also in the project directory, execute:
     ```bash
-    streamlit run streamlit_app.py
+    streamlit run start_agent_web.py
     ```
 
     This will open the Streamlit UI in your web browser, allowing you to interact with the email agent.
