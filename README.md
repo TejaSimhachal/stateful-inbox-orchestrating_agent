@@ -1,4 +1,4 @@
-# Email Automation Agent with LangGraph and FastAPI
+ # Email Automation Agent with LangGraph and FastAPI
 
 This project implements an advanced, event-driven AI Agent pipeline designed for email automation. It combines a FastAPI HTTP control surface with a stateful LangGraph execution topology to support multi-turn workflows, human-in-the-loop review, and transactional state persistence so long-running asynchronous runs can pause and resume.
 
@@ -99,18 +99,20 @@ Environment variables used by the code:
 
 Security note: do not commit `.env` or credentials to the repository.
 
-## Install and run
+## Quick Start
 
-Install dependencies and run the FastAPI server:
+1.  **Start the FastAPI server**: In your terminal, navigate to the project directory and run:
+    ```bash
+    python main.py
+    ```
 
-```
-python -m pip install -r requirements.txt
-# development with reload
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+2.  **Run the Streamlit application**: In a *separate* terminal, also in the project directory, execute:
+    ```bash
+    streamlit run streamlit_app.py
+    ```
 
-# or run the module which calls uvicorn.run in main.py
-python main.py
-```
+    This will open the Streamlit UI in your web browser, allowing you to interact with the email agent.
+
 
 ## HTTP API examples
 
